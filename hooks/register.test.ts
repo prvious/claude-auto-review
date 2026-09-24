@@ -589,6 +589,7 @@ test('handles a new conversation after clear without a native session.start', as
   mock.store(on)
   let sessionId = 'before-clear'
   let downstreamCalls = 0
+  const statuses: string[] = []
   let enterOldRoot!: () => void
   let releaseOldRoot!: () => void
   const oldRootEntered = new Promise<void>(resolve => {
@@ -599,7 +600,7 @@ test('handles a new conversation after clear without a native session.start', as
   })
   on('session.id', () => ({ value: sessionId }))
   on('session.messages', () => ({ value: [] }))
-  on('session.cwd', () => ({ value: '/work' }))
+  on('session.cwd', () => ({ value: '/work/sub' }))
   on('session.root', async () => {
     if (sessionId === 'before-clear') {
       enterOldRoot()
@@ -609,8 +610,11 @@ test('handles a new conversation after clear without a native session.start', as
   })
   on('model.complete', () => ({ value: answeredOk }))
   on('command.register', () => ({ value: {} }))
-  on('ui.status', () => ({ value: null }))
-  on('session.start', () => ({ cwd: '/work' }))
+  on('ui.status', (_core, event) => {
+    statuses.push(event.text)
+    return { value: null }
+  })
+  on('session.start', (_core, event) => ({ cwd: event.cwd }))
   on('session.end', () => ({ sessionId }))
   on('prompt.submit', (_core, event) => ({ text: event.text }))
   on('tool.call', () => {
@@ -618,7 +622,7 @@ test('handles a new conversation after clear without a native session.start', as
     return { result: undefined }
   })
 
-  await $.session.start({ cwd: '/work' })
+  await $.session.start({ cwd: '/work/sub' })
   const oldCall = $.tool.call({ tool: 'Example', tool_use_id: 'before-clear-call', input: {} })
   await oldRootEntered
   await $.session.end({ sessionId })
@@ -633,6 +637,21 @@ test('handles a new conversation after clear without a native session.start', as
   releaseOldRoot()
   await expect(oldCall).resolves.toEqual({ deny: 'Approval reviewer session is closed.' })
   expect(downstreamCalls).toBe(1)
+
+  await $.session.end({ sessionId })
+  await $.session.start({ cwd: '/work/sub' })
+  expect(statuses.at(-1)).toBe('approval reviewer active')
+
+  await $.session.end({ sessionId })
+  sessionId = 'after-clear-bridge'
+  await $.prompt.submit({
+    text: 'run the harmless command',
+    origin: { kind: 'bridge' },
+  } as never)
+  await expect(
+    $.tool.call({ tool: 'Example', tool_use_id: 'bridge-call', input: {} }),
+  ).resolves.toEqual({ result: undefined })
+  expect(downstreamCalls).toBe(2)
 })
 
 test('denies a tool call prepared across same-runtime resume', async ($, on) => {

@@ -722,9 +722,9 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     const sessionId = await $.session.id()
     // Claude Code 2.1.281 skips native session.start after /clear. Bind the
-    // new conversation on its first owner prompt so later calls use its state.
-    if (e.origin.kind === 'composer' && !sessionWorkspaces.has(sessionId)) {
-      sessionWorkspaces.set(sessionId, await $.session.root())
+    // new conversation on its first prompt so later calls use its state.
+    if (!sessionWorkspaces.has(sessionId)) {
+      sessionWorkspaces.set(sessionId, await $.session.cwd())
     }
     const state = await stateFor($, sessionId)
     const generation = state.generation
