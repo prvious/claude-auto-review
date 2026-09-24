@@ -316,7 +316,8 @@ async function stateFor(
   let promise!: Promise<SessionState>
   promise = (async () => {
     const now = await $.clock.now()
-    const directory = workspace ?? sessionWorkspaces.get(sessionId) ?? await $.session.root()
+    // /clear can skip session.start, so the first state access binds its workspace.
+    const directory = workspace ?? sessionWorkspaces.get(sessionId) ?? await $.session.cwd()
     let saved: unknown
     let storeLoadFailed = false
     try {
@@ -337,6 +338,7 @@ async function stateFor(
     if (!lifecycleIsCurrent(sessionId, expectedEpoch)) {
       return lifecycleTombstone(sessionId)
     }
+    if (!sessionWorkspaces.has(sessionId)) sessionWorkspaces.set(sessionId, directory)
     states.set(sessionId, state)
     if (stateLoads.get(sessionId)?.promise === promise) stateLoads.delete(sessionId)
     return state
@@ -641,8 +643,9 @@ export const register: Register = (on, options) => {
     if (!isCurrentStart()) return next(e)
     const messages = await $.session.messages()
     if (!isCurrentStart()) return next(e)
+    // Claude exposes tool results as empty user messages on resume.
     const transcriptOwners = messages.filter(
-      (message: SessionMessage) => message.role === 'user',
+      (message: SessionMessage) => message.role === 'user' && message.text.trim() !== '',
     )
     const retainedTail = state.ownerMessages.slice(-transcriptOwners.length)
     const transcriptMismatch = transcriptOwners.some((message, index) => {

@@ -536,11 +536,13 @@ test('restores each workspace from its own persisted session', async ($, on) => 
   }
 })
 
-test('reactivates a closed session on same-runtime resume', async ($, on) => {
+test('reactivates a closed session with an empty tool-result message on resume', async ($, on) => {
   mock.clock(on)
   const sessionId = 'session-resume-same-runtime-20260920'
   const store = new Map<string, unknown>()
   let downstreamCalls = 0
+  let resumed = false
+  const statuses: string[] = []
   on('store.set', (_core, event) => {
     store.set(event.key, event.value)
     return { value: undefined }
@@ -552,12 +554,22 @@ test('reactivates a closed session on same-runtime resume', async ($, on) => {
     return { value: undefined }
   })
   on('session.id', () => ({ value: sessionId }))
-  on('session.messages', () => ({ value: [] }))
+  on('session.messages', () => ({
+    value: resumed
+      ? [
+          { role: 'user', text: 'keep this constraint', toolUses: [] },
+          { role: 'user', text: '', toolUses: [] },
+        ]
+      : [],
+  }))
   on('session.cwd', () => ({ value: '/work' }))
   on('session.root', () => ({ value: '/work' }))
   on('model.complete', () => ({ value: answeredOk }))
   on('command.register', () => ({ value: {} }))
-  on('ui.status', () => ({ value: null }))
+  on('ui.status', (_core, event) => {
+    statuses.push(event.text)
+    return { value: null }
+  })
   on('session.start', () => ({ cwd: '/work' }))
   on('session.end', () => ({ sessionId }))
   on('prompt.submit', (_core, event) => ({ text: event.text }))
@@ -572,7 +584,9 @@ test('reactivates a closed session on same-runtime resume', async ($, on) => {
     origin: { kind: 'composer' },
   } as never)
   await $.session.end({ sessionId })
+  resumed = true
   await $.session.start({ cwd: '/work' })
+  expect(statuses.at(-1)).toBe('approval reviewer active')
   await expect(
     $.tool.call({ tool: 'Example', tool_use_id: 'resume-call-1', input: {} }),
   ).resolves.toEqual({ result: undefined })
@@ -582,6 +596,77 @@ test('reactivates a closed session on same-runtime resume', async ($, on) => {
       ownerMessages: Array<{ original: string }>
     }).ownerMessages.map(message => message.original),
   ).toEqual(['keep this constraint'])
+})
+
+test('handles a command before the first prompt after clear without session.start', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  let sessionId = 'before-clear'
+  let downstreamCalls = 0
+  const statuses: string[] = []
+  let enterOldRoot!: () => void
+  let releaseOldRoot!: () => void
+  const oldRootEntered = new Promise<void>(resolve => {
+    enterOldRoot = resolve
+  })
+  const oldRootRelease = new Promise<void>(resolve => {
+    releaseOldRoot = resolve
+  })
+  on('session.id', () => ({ value: sessionId }))
+  on('session.messages', () => ({ value: [] }))
+  on('session.cwd', () => ({ value: '/work/sub' }))
+  on('session.root', async () => {
+    if (sessionId === 'before-clear') {
+      enterOldRoot()
+      await oldRootRelease
+    }
+    return { value: '/work' }
+  })
+  on('model.complete', () => ({ value: answeredOk }))
+  on('command.register', () => ({ value: {} }))
+  on('ui.status', (_core, event) => {
+    statuses.push(event.text)
+    return { value: null }
+  })
+  on('session.start', (_core, event) => ({ cwd: event.cwd }))
+  on('session.end', () => ({ sessionId }))
+  on('prompt.submit', (_core, event) => ({ text: event.text }))
+  on('tool.call', () => {
+    downstreamCalls += 1
+    return { result: undefined }
+  })
+
+  await $.session.start({ cwd: '/work/sub' })
+  const oldCall = $.tool.call({ tool: 'Example', tool_use_id: 'before-clear-call', input: {} })
+  await oldRootEntered
+  await $.session.end({ sessionId })
+  sessionId = 'after-clear'
+  await $.command.run({ command: 'approval-history', args: '' } as never)
+  await $.prompt.submit({
+    text: 'run the harmless command',
+    origin: { kind: 'composer' },
+  } as never)
+  await expect(
+    $.tool.call({ tool: 'Example', tool_use_id: 'after-clear-call', input: {} }),
+  ).resolves.toEqual({ result: undefined })
+  releaseOldRoot()
+  await expect(oldCall).resolves.toEqual({ deny: 'Approval reviewer session is closed.' })
+  expect(downstreamCalls).toBe(1)
+
+  await $.session.end({ sessionId })
+  await $.session.start({ cwd: '/work/sub' })
+  expect(statuses.at(-1)).toBe('approval reviewer active')
+
+  await $.session.end({ sessionId })
+  sessionId = 'after-clear-bridge'
+  await $.prompt.submit({
+    text: 'run the harmless command',
+    origin: { kind: 'bridge' },
+  } as never)
+  await expect(
+    $.tool.call({ tool: 'Example', tool_use_id: 'bridge-call', input: {} }),
+  ).resolves.toEqual({ result: undefined })
+  expect(downstreamCalls).toBe(2)
 })
 
 test('denies a tool call prepared across same-runtime resume', async ($, on) => {
