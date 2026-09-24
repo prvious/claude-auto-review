@@ -584,7 +584,7 @@ test('reactivates a closed session on same-runtime resume', async ($, on) => {
   ).toEqual(['keep this constraint'])
 })
 
-test('handles a new conversation after clear without a native session.start', async ($, on) => {
+test('handles a command before the first prompt after clear without session.start', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   let sessionId = 'before-clear'
@@ -627,6 +627,7 @@ test('handles a new conversation after clear without a native session.start', as
   await oldRootEntered
   await $.session.end({ sessionId })
   sessionId = 'after-clear'
+  await $.command.run({ command: 'approval-history', args: '' } as never)
   await $.prompt.submit({
     text: 'run the harmless command',
     origin: { kind: 'composer' },

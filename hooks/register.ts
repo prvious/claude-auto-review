@@ -314,7 +314,8 @@ async function stateFor(
   let promise!: Promise<SessionState>
   promise = (async () => {
     const now = await $.clock.now()
-    const directory = workspace ?? sessionWorkspaces.get(sessionId) ?? await $.session.root()
+    // /clear can skip session.start, so the first state access binds its workspace.
+    const directory = workspace ?? sessionWorkspaces.get(sessionId) ?? await $.session.cwd()
     let saved: unknown
     let storeLoadFailed = false
     try {
@@ -335,6 +336,7 @@ async function stateFor(
     if (!lifecycleIsCurrent(sessionId, expectedEpoch)) {
       return lifecycleTombstone(sessionId)
     }
+    if (!sessionWorkspaces.has(sessionId)) sessionWorkspaces.set(sessionId, directory)
     states.set(sessionId, state)
     if (stateLoads.get(sessionId)?.promise === promise) stateLoads.delete(sessionId)
     return state
@@ -721,11 +723,6 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     const sessionId = await $.session.id()
-    // Claude Code 2.1.281 skips native session.start after /clear. Bind the
-    // new conversation on its first prompt so later calls use its state.
-    if (!sessionWorkspaces.has(sessionId)) {
-      sessionWorkspaces.set(sessionId, await $.session.cwd())
-    }
     const state = await stateFor($, sessionId)
     const generation = state.generation
     const instructionGeneration =
