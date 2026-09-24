@@ -536,11 +536,13 @@ test('restores each workspace from its own persisted session', async ($, on) => 
   }
 })
 
-test('reactivates a closed session on same-runtime resume', async ($, on) => {
+test('reactivates a closed session with an empty tool-result message on resume', async ($, on) => {
   mock.clock(on)
   const sessionId = 'session-resume-same-runtime-20260920'
   const store = new Map<string, unknown>()
   let downstreamCalls = 0
+  let resumed = false
+  const statuses: string[] = []
   on('store.set', (_core, event) => {
     store.set(event.key, event.value)
     return { value: undefined }
@@ -552,12 +554,22 @@ test('reactivates a closed session on same-runtime resume', async ($, on) => {
     return { value: undefined }
   })
   on('session.id', () => ({ value: sessionId }))
-  on('session.messages', () => ({ value: [] }))
+  on('session.messages', () => ({
+    value: resumed
+      ? [
+          { role: 'user', text: 'keep this constraint', toolUses: [] },
+          { role: 'user', text: '', toolUses: [] },
+        ]
+      : [],
+  }))
   on('session.cwd', () => ({ value: '/work' }))
   on('session.root', () => ({ value: '/work' }))
   on('model.complete', () => ({ value: answeredOk }))
   on('command.register', () => ({ value: {} }))
-  on('ui.status', () => ({ value: null }))
+  on('ui.status', (_core, event) => {
+    statuses.push(event.text)
+    return { value: null }
+  })
   on('session.start', () => ({ cwd: '/work' }))
   on('session.end', () => ({ sessionId }))
   on('prompt.submit', (_core, event) => ({ text: event.text }))
@@ -572,7 +584,9 @@ test('reactivates a closed session on same-runtime resume', async ($, on) => {
     origin: { kind: 'composer' },
   } as never)
   await $.session.end({ sessionId })
+  resumed = true
   await $.session.start({ cwd: '/work' })
+  expect(statuses.at(-1)).toBe('approval reviewer active')
   await expect(
     $.tool.call({ tool: 'Example', tool_use_id: 'resume-call-1', input: {} }),
   ).resolves.toEqual({ result: undefined })

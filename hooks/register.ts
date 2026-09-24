@@ -641,8 +641,9 @@ export const register: Register = (on, options) => {
     if (!isCurrentStart()) return next(e)
     const messages = await $.session.messages()
     if (!isCurrentStart()) return next(e)
+    // Claude exposes tool results as empty user messages on resume.
     const transcriptOwners = messages.filter(
-      (message: SessionMessage) => message.role === 'user',
+      (message: SessionMessage) => message.role === 'user' && message.text.trim() !== '',
     )
     const retainedTail = state.ownerMessages.slice(-transcriptOwners.length)
     const transcriptMismatch = transcriptOwners.some((message, index) => {
