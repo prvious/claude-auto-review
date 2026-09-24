@@ -111,6 +111,8 @@ const sessionWorkspaces = new Map<string, string>()
 const calls = new Map<string, CallRecord>()
 let globallyInvalid = false
 let storeWrite = Promise.resolve()
+const isUserQuestion = (tool: string) =>
+  tool === 'AskUserQuestion' || tool === 'ExitPlanMode'
 
 const textBytes = (value: unknown) =>
   new TextEncoder().encode(JSON.stringify(value)).byteLength
@@ -821,6 +823,7 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', async ($, e, next) => {
+    if (isUserQuestion(e.tool)) return next(e)
     let expire = () => undefined
     const deadline = new Promise<void>(resolve => {
       expire = resolve
@@ -922,7 +925,7 @@ export const register: Register = (on, options) => {
 
   on('tool.check', async ($, e, next) => {
     const downstream = await next(e)
-    if (downstream.decision !== 'ask') return downstream
+    if (downstream.decision !== 'ask' || isUserQuestion(e.tool)) return downstream
 
     let currentSessionId: string
     try {
@@ -973,12 +976,6 @@ export const register: Register = (on, options) => {
       return { decision: 'deny' as const, reason: safeReason }
     }
 
-    if (e.tool === 'ExitPlanMode') {
-      return immediateDeny(
-        'plan-transition',
-        'Approval reviewer does not approve leaving Plan mode.',
-      )
-    }
     if (!deadlineCall) return immediateDeny('context-integrity')
 
     const handling = (async () => {

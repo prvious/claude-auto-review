@@ -731,18 +731,23 @@ test('preserves a downstream deny decision', async ($, on) => {
   ).resolves.toEqual({ decision: 'deny' })
 })
 
-test('denies ExitPlanMode asks directly', async ($, on) => {
+test('passes native user questions to Claude Code', async ($, on) => {
   mock.clock(on)
   mock.store(on)
-  on('session.id', () => ({ value: 'session-plan' }))
-  on('tool.check', () => ({ decision: 'ask', reason: 'Exit plan mode?' }))
-
-  await expect(
-    $.tool.check({ tool: 'ExitPlanMode', input: { plan: 'Implement it.' } }),
-  ).resolves.toEqual({
-    decision: 'deny',
-    reason: 'Approval reviewer does not approve leaving Plan mode.',
+  on('session.id', () => {
+    throw new Error('question should not need session state')
   })
+  on('tool.check', () => ({ decision: 'ask', reason: 'Ask the user' }))
+  on('tool.call', () => ({ result: undefined }))
+
+  for (const tool of ['ExitPlanMode', 'AskUserQuestion']) {
+    await expect($.tool.check({ tool, input: {} })).resolves.toEqual({
+      decision: 'ask',
+      reason: 'Ask the user',
+    })
+    await expect($.tool.call({ tool, tool_use_id: `question-${tool}`, input: {} }))
+      .resolves.toEqual({ result: undefined })
+  }
 })
 
 test('an uncorrelated pending ask fails closed', async ($, on) => {
