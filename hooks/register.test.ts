@@ -584,6 +584,57 @@ test('reactivates a closed session on same-runtime resume', async ($, on) => {
   ).toEqual(['keep this constraint'])
 })
 
+test('handles a new conversation after clear without a native session.start', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  let sessionId = 'before-clear'
+  let downstreamCalls = 0
+  let enterOldRoot!: () => void
+  let releaseOldRoot!: () => void
+  const oldRootEntered = new Promise<void>(resolve => {
+    enterOldRoot = resolve
+  })
+  const oldRootRelease = new Promise<void>(resolve => {
+    releaseOldRoot = resolve
+  })
+  on('session.id', () => ({ value: sessionId }))
+  on('session.messages', () => ({ value: [] }))
+  on('session.cwd', () => ({ value: '/work' }))
+  on('session.root', async () => {
+    if (sessionId === 'before-clear') {
+      enterOldRoot()
+      await oldRootRelease
+    }
+    return { value: '/work' }
+  })
+  on('model.complete', () => ({ value: answeredOk }))
+  on('command.register', () => ({ value: {} }))
+  on('ui.status', () => ({ value: null }))
+  on('session.start', () => ({ cwd: '/work' }))
+  on('session.end', () => ({ sessionId }))
+  on('prompt.submit', (_core, event) => ({ text: event.text }))
+  on('tool.call', () => {
+    downstreamCalls += 1
+    return { result: undefined }
+  })
+
+  await $.session.start({ cwd: '/work' })
+  const oldCall = $.tool.call({ tool: 'Example', tool_use_id: 'before-clear-call', input: {} })
+  await oldRootEntered
+  await $.session.end({ sessionId })
+  sessionId = 'after-clear'
+  await $.prompt.submit({
+    text: 'run the harmless command',
+    origin: { kind: 'composer' },
+  } as never)
+  await expect(
+    $.tool.call({ tool: 'Example', tool_use_id: 'after-clear-call', input: {} }),
+  ).resolves.toEqual({ result: undefined })
+  releaseOldRoot()
+  await expect(oldCall).resolves.toEqual({ deny: 'Approval reviewer session is closed.' })
+  expect(downstreamCalls).toBe(1)
+})
+
 test('denies a tool call prepared across same-runtime resume', async ($, on) => {
   mock.clock(on)
   mock.store(on)

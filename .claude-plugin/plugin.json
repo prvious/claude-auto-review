@@ -1,6 +1,6 @@
 {
   "name": "approval-reviewer",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Reviews pending Claude Code tool permissions with the session's native model and resolves each covered request once",
   "author": {
     "name": "prvious"
