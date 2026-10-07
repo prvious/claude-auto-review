@@ -255,7 +255,10 @@ async function gatherEvidence(
       } else {
         if (host.cancelled() || !input.isFresh()) throw new Error('review became stale')
         const text = await host.read(request.path)
-        if (bytes(text) > MAX_FILE_BYTES) {
+        // ponytail: snapshot checks are non-atomic; strict race protection needs a read bound to file identity.
+        const after = await host.stat(request.path, { resolve: true })
+        if (after.kind !== 'file' || after.realPath !== stat.realPath ||
+            after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || bytes(text) > MAX_FILE_BYTES) {
           item.reason = 'file changed or exceeds the evidence size limit'
         } else {
           item.status = 'ok'

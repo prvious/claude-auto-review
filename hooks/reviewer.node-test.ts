@@ -206,6 +206,36 @@ test('evidence Read preserves the path spelling enforced by classic hooks',async
   await reviewPending(f.host,f.input);assert.deepEqual(paths,['/work/alias.md']);assert.doesNotMatch(f.requests[1].prompt,/PROTECTED_CANARY/)
 })
 
+test('evidence reads discard content when the resolved file changes during Read',async()=>{
+  for(const change of ['target','inside-target','size','mtime','kind','unresolved','stat-error','unchanged']){
+    const path='/work/alias.md',content='READ_RACE_CANARY'
+    const f=fixture([answered(JSON.stringify({type:'need_evidence',requests:[{operation:'read',path}]})),answered(assessment())])
+    const stat=f.host.stat;let read=false
+    f.host.stat=async(request,options)=>{
+      if(request!==path)return stat(request,options)
+      const snapshot={kind:'file' as const,size:content.length,mtimeMs:1,isLink:true,realPath:'/work/real.md'}
+      if(!read)return snapshot
+      if(change==='stat-error')throw Error('file disappeared after Read')
+      return {...snapshot,
+        realPath:change==='target'?'/outside/other.md':change==='inside-target'?'/work/other.md':change==='unresolved'?undefined:snapshot.realPath,
+        size:change==='size'?snapshot.size+1:snapshot.size,
+        mtimeMs:change==='mtime'?2:snapshot.mtimeMs,
+        kind:change==='kind'?'dir':snapshot.kind}
+    }
+    f.host.read=async request=>{f.reads.push(request);read=true;return content}
+    const result=await reviewPending(f.host,f.input),item=f.input.budget.evidence![0]
+    assert.equal(result.attempts,2);assert.equal(f.input.budget.evidenceRounds,1);assert.deepEqual(f.reads,[path])
+    if(change==='unchanged'){
+      assert.equal(item.status,'ok');assert.equal(item.data,content)
+      assert.deepEqual(item.snapshot,{realPath:'/work/real.md',size:content.length,mtimeMs:1})
+      assert.match(f.requests[1].prompt,/READ_RACE_CANARY/)
+    }else{
+      assert.equal(item.status,'gap',change);assert.equal(item.data,undefined);assert.equal(item.snapshot,undefined)
+      assert.ok(item.reason);assert.doesNotMatch(f.requests[1].prompt,/READ_RACE_CANARY/)
+    }
+  }
+})
+
 test('freshness is rechecked after awaiting the review clock',async()=>{
   const f=fixture([answered(assessment())]);let fresh=true;f.input.isFresh=()=>fresh
   f.host.now=async()=>{fresh=false;return 100}
