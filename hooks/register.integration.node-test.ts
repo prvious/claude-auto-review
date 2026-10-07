@@ -41,23 +41,25 @@ function fixture(options={}){
     if(verdict.decision==='allow'){effects++;return {result:{count:effects}}}return {deny:verdict.reason??'native ask'}
   }
   const attach=(type:string,agentId?:string)=>invoke('prompt.attachment',{type,origin:{kind:'engine'},agentId,text:''},async()=>({text:''}))
-  return {$,hooks,catches,invoke,check,call,submit,attach,controller,prompts,agentReads,
+  return {$,hooks,catches,invoke,nextCheck,check,call,submit,attach,controller,prompts,agentReads,
     expireReviews:()=>{for(const timer of timers)if(timer.active)timer.fn()},
     setSession:(id:string)=>{sessionId=id},setMessages:(rows:any[])=>{messages=rows},setComplete:(fn:any)=>{complete=fn},get modelCalls(){return modelCalls},get effects(){return effects}}
 }
 
+const nativeCases:any[]=[
+  [{tool:'Bash',input:{},tool_use_id:'r1'},{decision:'allow'},undefined],
+  [{tool:'Bash',input:{},tool_use_id:'r1'},{decision:'deny',reason:'managed'},undefined],
+  [{tool:'Bash',input:{},tool_use_id:'r1'},{decision:'ask',rule:'Bash(*)'},undefined],
+  [{tool:'Edit',input:{file_path:'/work/a'},tool_use_id:'r1'},{decision:'ask',hook:'PreToolUse'},undefined],
+  [{tool:'Bash',input:{},tool_use_id:'r1',ceiling:'ask'},{decision:'ask',ceiling:'ask'},undefined],
+  [{tool:'AskUserQuestion',input:{},tool_use_id:'r1'},{decision:'ask'},undefined],
+  [{tool:'ExitPlanMode',input:{},tool_use_id:'r1'},{decision:'ask'},undefined],
+  [{tool:'Bash',input:{}},{decision:'ask'},undefined],
+  [{tool:'Bash',input:{},tool_use_id:'r1'},{decision:'ask'},{plugin:'another-plugin',tier:'user'}],
+]
+
 test('native allows, denials, explicit asks, questions, plugin calls and queries are preserved',async()=>{
-  for(const [input,down,origin] of [
-    [{tool:'Bash',input:{},tool_use_id:'r1'},{decision:'allow'},undefined],
-    [{tool:'Bash',input:{},tool_use_id:'r1'},{decision:'deny',reason:'managed'},undefined],
-    [{tool:'Bash',input:{},tool_use_id:'r1'},{decision:'ask',rule:'Bash(*)'},undefined],
-    [{tool:'Edit',input:{file_path:'/work/a'},tool_use_id:'r1'},{decision:'ask',hook:'PreToolUse'},undefined],
-    [{tool:'Bash',input:{},tool_use_id:'r1',ceiling:'ask'},{decision:'ask',ceiling:'ask'},undefined],
-    [{tool:'AskUserQuestion',input:{},tool_use_id:'r1'},{decision:'ask'},undefined],
-    [{tool:'ExitPlanMode',input:{},tool_use_id:'r1'},{decision:'ask'},undefined],
-    [{tool:'Bash',input:{}},{decision:'ask'},undefined],
-    [{tool:'Bash',input:{},tool_use_id:'r1'},{decision:'ask'},{plugin:'another-plugin',tier:'user'}],
-  ] as any[]){const f=fixture();assert.deepEqual(await f.check(input,down,origin),down);assert.equal(f.modelCalls,0)}
+  for(const [input,down,origin] of nativeCases){const f=fixture();assert.deepEqual(await f.check(input,down,origin),down);assert.equal(f.modelCalls,0)}
 })
 
 test('metadata failure cannot block native allowed calls',async()=>{
@@ -306,8 +308,8 @@ test('parent mode changes refresh an unobserved child within the same budget',as
   assert.equal((await pending).decision,'deny');assert.equal(f.modelCalls,2)
 })
 
-test('a child mode handoff invalidates equal parent and child revision numbers',async()=>{
-  const f=fixture();await f.attach('auto_mode');const answer=deferred()
+test("a child's own mode attachment refreshes a review started under the parent's mode",async()=>{
+  const f=fixture();await f.attach('plan_mode_exit');const answer=deferred()
   f.setComplete(()=>f.modelCalls===1?answer.promise:Promise.resolve(reply(assessment({planCompatible:false}))))
   const pending=f.check({tool:'Bash',tool_use_id:'child-handoff',agentId:'child',input:{command:'echo bounded'}})
   await new Promise(r=>setImmediate(r));await f.attach('plan_mode','child');answer.resolve(reply(assessment()))
@@ -333,13 +335,48 @@ test('native child startup mode survives a later parent mode change',async()=>{
   assert.equal(f.modelCalls,1)
 })
 
-test('spawn mode capture preserves native results on metadata failure and newer child attachments',async()=>{
-  const f=fixture();const result={agentId:'child'};const next:any=async()=>result
+test('spawn metadata failure is left to the host before spawning, and newer child attachments are preserved',async()=>{
+  const f=fixture();const result={agentId:'child'};let spawned=0;const next:any=async()=>{spawned++;return result}
   next.trace=[{plugin:'engine',tier:'core',event:'agent.spawn',outcome:'returned',returned:result}]
   const id=f.$.session.id;f.$.session.id=async()=>{throw Error('metadata unavailable')}
-  assert.equal(await f.invoke('agent.spawn',{permissionMode:'plan'},next),result);f.$.session.id=id
+  // The host skips a failed hook, starts the subagent natively and reports the failure.
+  await assert.rejects(f.invoke('agent.spawn',{permissionMode:'plan'},next),/metadata unavailable/);assert.equal(spawned,0);f.$.session.id=id
   await f.attach('plan_mode','child')
   assert.equal(await f.invoke('agent.spawn',{permissionMode:'default'},next),result)
   f.setComplete(async()=>reply(assessment({planCompatible:false})))
   assert.equal((await f.check({tool:'Edit',tool_use_id:'child-edit',agentId:'child',input:{file_path:'/work/a.ts'}})).decision,'deny')
+})
+
+test('the registered fallback preserves native verdicts and denies only an eligible ask as unavailable',async()=>{
+  const f=fixture();const fallback=f.catches.get(f.hooks.get('tool.check')![0])
+  for(const [input,down,origin] of nativeCases)assert.deepEqual(await fallback(f.$,input,f.nextCheck(down,origin)),down,JSON.stringify(input))
+  const result=await fallback(f.$,{tool:'Bash',input:{command:'echo bounded'},tool_use_id:'r1'},f.nextCheck())
+  assert.equal(result.decision,'deny');assert.match(result.reason,/could not complete \(hook\)/);assert.equal(f.modelCalls,0)
+})
+
+test('an ask answered by another plugin or an unreturned core link keeps native behavior',async()=>{
+  for(const link of [{plugin:'corp-guard',tier:'append',outcome:'returned'},{plugin:'engine',tier:'core',outcome:'skipped'}]){
+    const f=fixture();const next=f.nextCheck();next.trace=[{...link,event:'tool.check',returned:{decision:'ask'}}]
+    assert.deepEqual(await f.invoke('tool.check',{tool:'Bash',input:{command:'echo bounded'},tool_use_id:'r1'},next),{decision:'ask'},link.plugin)
+    assert.equal(f.modelCalls,0)
+  }
+})
+
+test('the same tool_use_id with different input gets its own review',async()=>{
+  const f=fixture();const answer=deferred()
+  f.setComplete(async(req:any)=>{f.prompts.push(req);return f.modelCalls===1?answer.promise:reply(assessment({risk:'Critical',reason:'Destroys workspace data.'}))})
+  const first=f.check();await new Promise(r=>setImmediate(r))
+  const second=f.check({tool:'Bash',input:{command:'rm -rf /work/data'},tool_use_id:'r1'});await new Promise(r=>setImmediate(r))
+  assert.equal(f.modelCalls,2);answer.resolve(reply(assessment()))
+  assert.equal((await second).decision,'deny');assert.match(f.prompts[1].prompt,/rm -rf/);assert.equal((await first).decision,'allow')
+})
+
+test('missing main or agent history never disables review',async()=>{
+  const f=fixture();f.$.session.messages=async(args:any)=>{if(args?.agentId)return {deny:'unavailable'};throw Error('history unavailable')}
+  f.setComplete(async(req:any)=>{f.prompts.push(req);return reply(assessment())})
+  assert.ok((await f.call({tool:'Bash',command:'inspect',tool_use_id:'r1',agentId:'child'})).result)
+  assert.match(f.prompts[0].prompt,/Main transcript unavailable/);assert.match(f.prompts[0].prompt,/Agent transcript unavailable/)
+  f.$.session.messages=async()=>{throw Error('history unavailable')}
+  assert.ok((await f.call({tool:'Bash',command:'other',tool_use_id:'r2',agentId:'child'})).result)
+  assert.match(f.prompts[1].prompt,/Agent transcript unavailable/)
 })

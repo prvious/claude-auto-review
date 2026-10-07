@@ -1,5 +1,5 @@
 import type { EngineInterface, Register, SessionMessage, Timer } from 'claude-code'
-import { canonical, reviewPending, sanitize, ReviewFailure,
+import { canonical, reviewPending, sanitize, ReviewFailure, MAX_COMPLETIONS,
   type OwnerMessage, type ReviewBudget, type ReviewResult } from './reviewer.ts'
 import { classifyWorkspaceMutation } from './workspace.ts'
 
@@ -20,7 +20,7 @@ type HistoryEntry = {
 type SessionState = {
   revision: number
   owners: OwnerMessage[]
-  modes: Map<string, { plan: boolean; auto: boolean }>
+  modes: Map<string, { plan: boolean }>
   history: HistoryEntry[]
   reviews: Map<string, Promise<Verdict>>
   admissions: Set<Promise<void>>
@@ -142,19 +142,15 @@ export const register: Register = (on, options) => {
   })
 
   on('prompt.attachment', async ($, e, next) => {
-    try {
-      if (e.origin.kind === 'engine' && ['plan_mode', 'plan_mode_exit', 'auto_mode', 'auto_mode_exit'].includes(e.type)) {
-        const state = stateFor(await $.session.id())
-        const loop = e.agentId ?? 'main'
-        const previous = state.modes.get(loop)
-        const current = { ...(previous ?? state.modes.get('main') ?? { plan: false, auto: false }) }
-        if (e.type.startsWith('plan_mode')) current.plan = e.type === 'plan_mode'
-        if (e.type.startsWith('auto_mode')) current.auto = e.type === 'auto_mode'
-        if (!previous || current.plan !== previous.plan || current.auto !== previous.auto) {
-          state.modes.set(loop, current)
-        }
-      }
-    } catch {}
+    // ponytail: a failed lookup throws, so the host skips this hook, runs core and reports it.
+    // A missed entry leaves Plan unenforced until the next reminder; a missed exit keeps it
+    // enforced until Plan mode is entered and exited again. Track failures if this is observed.
+    if (e.origin.kind === 'engine' && ['plan_mode', 'plan_mode_exit'].includes(e.type)) {
+      const state = stateFor(await $.session.id())
+      const loop = e.agentId ?? 'main'
+      const plan = e.type === 'plan_mode'
+      if (state.modes.get(loop)?.plan !== plan) state.modes.set(loop, { plan })
+    }
     return next(e)
   })
 
@@ -164,15 +160,12 @@ export const register: Register = (on, options) => {
   })
 
   on('agent.spawn', async ($, e, next) => {
-    let state: SessionState | undefined
-    try { state = stateFor(await $.session.id()) } catch {}
+    const state = stateFor(await $.session.id())
     const result = await next(e)
-    if (state && 'agentId' in result && typeof result.agentId === 'string' && e.permissionMode &&
+    if ('agentId' in result && typeof result.agentId === 'string' && e.permissionMode &&
         hasCoreResult(next.trace, 'agent.spawn', value => value?.agentId === result.agentId) &&
         !state.modes.has(result.agentId)) {
-      state.modes.set(result.agentId, {
-        plan: e.permissionMode === 'plan', auto: e.permissionMode === 'auto',
-      })
+      state.modes.set(result.agentId, { plan: e.permissionMode === 'plan' })
     }
     return result
   })
@@ -270,17 +263,17 @@ export const register: Register = (on, options) => {
                 input: e.input, cwd, root, planMode, ownerMessages: [...currentState.owners],
                 transcript, agentTranscript, contextNotes, budget, isFresh: fresh })
             } catch (error) {
-              if (error instanceof ReviewFailure && error.kind === 'stale' && active() && budget.attempts < 3) continue
+              if (error instanceof ReviewFailure && error.kind === 'stale' && active() && budget.attempts < MAX_COMPLETIONS) continue
               throw error
             }
             if (!fresh()) {
-              if (active() && budget.attempts < 3) continue
+              if (active() && budget.attempts < MAX_COMPLETIONS) continue
               throw new ReviewFailure('stale', 'review-stale', budget.attempts, 'instructions changed during review')
             }
             if (result.allow) {
               const [currentCwd, currentRoot] = await Promise.all([$.session.cwd(), $.session.root()])
               if (!fresh() || currentCwd !== cwd || currentRoot !== root) {
-                if (active() && budget.attempts < 3) continue
+                if (active() && budget.attempts < MAX_COMPLETIONS) continue
                 throw new ReviewFailure('stale', 'review-stale', budget.attempts, 'working scope changed during review')
               }
             }
@@ -289,7 +282,7 @@ export const register: Register = (on, options) => {
               kind: 'assessment', reason, attempts: result.attempts })
             bestEffortStatus($, 'approval reviewer active')
             return result.allow ? { decision: 'allow' } : { decision: 'deny', reason:
-              `${reason} This action was not run. Follow the stated safer alternative or ask the owner for the specific authorization needed; do not retry an equivalent action.` }
+              `${reason} This action was not run. Follow the stated safer alternative or ask the owner for the specific authorization needed; do not retry an equivalent action unless the owner authorizes it.` }
           }
           throw new ReviewFailure('stale', 'review-stale', budget.attempts, 'instructions kept changing during review')
         }
@@ -302,8 +295,11 @@ export const register: Register = (on, options) => {
       return await Promise.race([decide(), timeout])
     } catch (error) {
       const kind = error instanceof ReviewFailure ? error.kind : 'hook'
-      const detail = error instanceof ReviewFailure ? error.message : kind
-      const reason = unavailableReason(sanitize(detail, 160))
+      const detail = error instanceof ReviewFailure ? error.message
+        : `hook: ${error instanceof Error ? error.message : typeof error}`
+      // Splitting is the remedy for an oversized request, so skip the generic "do not split" text.
+      const reason = error instanceof ReviewFailure && error.code === 'prompt-too-large'
+        ? error.message : unavailableReason(sanitize(detail, 160))
       if (state) remember(state, { tool: e.tool, verdict: 'deny', kind: 'unavailable', reason,
         attempts: error instanceof ReviewFailure ? error.attempts : 0 })
       bestEffortStatus($, `approval reviewer active — last review unavailable (${kind})`)

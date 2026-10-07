@@ -74,7 +74,7 @@ test('strictly parses assessments and evidence requests', () => {
   )
 })
 
-test('rejects malformed, extra, oversized, and unknown evidence output', () => {
+test('rejects prose, fenced, extra-key, invalid-enum, empty and duplicate-path output', () => {
   const known = new Set(['u1'])
   const invalid = [
     `before ${JSON.stringify(assessment())}`,
@@ -95,7 +95,7 @@ test('rejects malformed, extra, oversized, and unknown evidence output', () => {
   }
 })
 
-test('exposes stable protocol error codes without relaxing validation', () => {
+test('exposes stable protocol error codes', () => {
   assert.throws(
     () => parseReviewResponse('not json', new Set()),
     error => {

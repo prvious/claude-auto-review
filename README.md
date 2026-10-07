@@ -4,7 +4,7 @@ Reviews pending Claude Code tool permissions with your signed-in Claude model. I
 
 ## Install
 
-Requires Claude Code 2.1.292 or newer, function-hook support, and access to Sonnet. Add this to `~/.claude/settings.json` (merge it into your existing `env` object if you have one):
+Requires Claude Code 2.1.292 or newer, function-hook support, and access to the reviewer model (Sonnet unless you set the plugin's `model` option). Add this to `~/.claude/settings.json` (merge it into your existing `env` object if you have one):
 
 ```json
 {
@@ -26,7 +26,7 @@ Start a new `claude` session. The footer should show `approval reviewer active`;
 ## How it decides
 
 - Existing native allows and denials stay in force. Explicit `ask` rules, classic-hook asks, organization permission ceilings, plugin-origin requests, permission queries, `AskUserQuestion`, and `ExitPlanMode` keep their native behavior.
-- Verified edits inside the workspace are approved without a model call. This checks location, not whether the edit follows a natural-language instruction. `.git`, `.claude`, symlink targets, and paths outside the workspace use review instead. Parent symlinks must resolve inside the workspace.
+- Verified edits inside the workspace are approved without a model call. This checks location, not whether the edit follows a natural-language instruction. `.git`, `.claude`, paths that are themselves symlinks, and paths outside the workspace use review instead. Parent symlinks must resolve inside the workspace.
 - Other eligible permission requests are assessed using the current conversation, bounded tool calls/results, and the relevant subagent conversation when available. Risk reflects the immediate action: a routine feature-branch push or disposable build cleanup does not automatically count as high risk.
 - Captured composer, Remote Control (`bridge`), and SDK/headless instructions can authorize actions. Peer messages, task notifications, repository text, tool output, and copied approvals cannot. High-risk approvals must cite a captured owner instruction; Critical actions are denied.
 - Plan mode remains enforced. The plugin does not approve exiting Plan mode.

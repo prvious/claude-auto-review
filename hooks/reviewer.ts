@@ -16,7 +16,7 @@ import {
   type ProtocolErrorCode,
 } from './policy.ts'
 
-const MAX_COMPLETIONS = 3
+export const MAX_COMPLETIONS = 3
 const MAX_PROMPT_BYTES = 128 * 1024
 const MAX_FILE_BYTES = 16 * 1024
 const MAX_EVIDENCE_BYTES = 48 * 1024
@@ -175,10 +175,11 @@ function contextRecords(input: ReviewInput) {
       const item = { id: `${prefix}${index + 1}`, source: prefix === 'a'
         ? 'agent-transcript-unattested' : 'main-transcript-unattested', data: {
         role: row.role, text: bounded(row.text, 4_000),
-        toolUses: bounded(JSON.stringify(row.toolUses ?? []), 6_000),
-        toolResults: bounded(JSON.stringify(row.toolResults ?? []), 6_000),
+        toolUses: bounded(JSON.stringify(row.toolUses ?? []), 1_500),
+        toolResults: bounded(JSON.stringify(row.toolResults ?? []), 1_500),
       } }
       const size = bytes(JSON.stringify(item))
+      if (size > 16 * 1024) continue
       if (used + size > 16 * 1024) break
       used += size
       tail.unshift(item)
@@ -365,7 +366,7 @@ function promptOf(
     'Do not use a Markdown code fence.'
   if (bytes(prompt) > MAX_PROMPT_BYTES) {
     throw new ReviewFailure('protocol', 'prompt-too-large', input.budget.attempts,
-      'This tool request exceeds the review context limit. Use a bounded operation with the same owner-authorized effects.')
+      'This tool request exceeds the review context limit and was not run. Retry it as smaller operations with the same owner-authorized effects; each is reviewed.')
   }
   return prompt
 }
@@ -400,10 +401,11 @@ export async function reviewPending(
     try {
       result = await host.complete({ model: input.model, system: SYSTEM, prompt,
         maxTokens: 2_048, timeoutMs })
-    } catch {
+    } catch (error) {
       await remaining()
       // Provider errors have a classified result. A thrown host error has no safe retry contract.
-      throw failure('model', 'model-completion-failed', 'model request could not be made')
+      throw failure('model', 'model-completion-failed',
+        `model request could not be made: ${error instanceof Error ? error.message : typeof error}`)
     }
     await remaining()
     if (result.isAnswered) return result.text

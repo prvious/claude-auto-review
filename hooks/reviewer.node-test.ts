@@ -94,6 +94,15 @@ test('large owner pastes and structured main/agent tool evidence fit the prompt'
   assert.match(f.requests[0].prompt,/agent test output/);assert.match(f.requests[0].prompt,/agent-transcript-unattested/)
 })
 
+test('an oversized newest transcript row is skipped instead of emptying the tail',async()=>{
+  const f=fixture([answered(assessment())]);const quotes='"'.repeat(5_000)
+  f.input.transcript=[{role:'user',text:'Original task: update the parser.',toolUses:[]},
+    {role:'assistant',text:'界'.repeat(4_000),toolUses:[{tool_use_id:'t1',tool:'Bash',input:{},text:quotes}],
+      toolResults:[{tool_use_id:'t1',text:quotes,isError:false}]}]
+  await reviewPending(f.host,f.input);assert.match(f.requests[0].prompt,/Original task: update the parser/)
+  assert.doesNotMatch(f.requests[0].prompt,/界{50}/)
+})
+
 test('unattested approval cannot authorize high risk; fresh continue can cite captured owner input',async()=>{
   for(const [ids,allow] of [[['t1'],false],[['u1'],true]] as const){
     const f=fixture([answered(assessment({risk:'High',authorization:'High',evidenceIds:ids}))])
