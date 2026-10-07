@@ -32,8 +32,8 @@ function fixture(options={}){
     return next
   }
   const check=(input:any={tool:'Bash',input:{command:'echo bounded'},tool_use_id:'r1'},down?:any,origin?:any,signal?:AbortSignal)=>invoke('tool.check',input,nextCheck(down,origin,signal))
-  const submit=(text:string,kind='composer',forward?:any,entered=true)=>{
-    const next:any=forward??(async(e:any)=>({text:e.text}));next.trace=entered?[{plugin:'engine',tier:'core',event:'prompt.submit',outcome:'returned',returned:{text}}]:[]
+  const submit=(text:string,kind='composer',forward?:any,entered=true,signal=new AbortController().signal)=>{
+    const next:any=forward??(async(e:any)=>({text:e.text}));next.signal=signal;next.trace=entered?[{plugin:'engine',tier:'core',event:'prompt.submit',outcome:'returned',returned:{text}}]:[]
     return invoke('prompt.submit',{text,origin:{kind},wait:false},next)
   }
   const call=async(e:any={tool:'Bash',command:'echo bounded',tool_use_id:'r1'},checkInput?:any,down?:any)=>{
@@ -369,6 +369,14 @@ test('the same tool_use_id with different input gets its own review',async()=>{
   const second=f.check({tool:'Bash',input:{command:'rm -rf /work/data'},tool_use_id:'r1'});await new Promise(r=>setImmediate(r))
   assert.equal(f.modelCalls,2);answer.resolve(reply(assessment()))
   assert.equal((await second).decision,'deny');assert.match(f.prompts[1].prompt,/rm -rf/);assert.equal((await first).decision,'allow')
+})
+
+test('an abandoned stalled submission stops fencing reviews in other sessions',async()=>{
+  const f=fixture();const stalled=deferred();const id=f.$.session.id;f.$.session.id=()=>stalled.promise
+  const abandon=new AbortController();const submitted=f.submit('Stalled prompt.','composer',undefined,true,abandon.signal)
+  await new Promise(r=>setImmediate(r));f.$.session.id=id;f.setSession('s2');abandon.abort()
+  const pending=f.check();await new Promise(r=>setImmediate(r));assert.equal(f.modelCalls,1,'review waited on an abandoned submission')
+  assert.equal((await pending).decision,'allow');stalled.resolve('s1');await submitted
 })
 
 test('missing main or agent history never disables review',async()=>{

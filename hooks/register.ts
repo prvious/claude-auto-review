@@ -107,6 +107,8 @@ export const register: Register = (on, options) => {
     let attributed!: () => void
     const attribution = new Promise<void>(resolve => { attributed = resolve })
     attributions.add(attribution)
+    // An abandoned submission (e.g. interrupted) must not keep fencing every session's reviews.
+    next.signal.addEventListener('abort', () => { attributions.delete(attribution); attributed() }, { once: true })
     let state: SessionState | undefined
     try {
       try { state = stateFor(await $.session.id()) } catch {

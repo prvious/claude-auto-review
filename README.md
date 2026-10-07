@@ -35,7 +35,7 @@ The last 256 accepted owner instructions are kept separately from transcript con
 
 ## Failure and recovery
 
-Each review has at most three model completions, one filesystem evidence round, and a 90-second deadline covering metadata, evidence, and model calls. Malformed responses get bounded repairs; transient provider failures get bounded retries. Changed owner instructions, working scope, or permission mode refresh the review within that same budget. Evidence remains available on refresh only while its scope and file metadata stay verified. Native Read permissions apply to evidence paths; file contents also pass through the actual Read tool and its classic hooks.
+Each review has at most three model completions, one filesystem evidence round, and a 90-second deadline covering metadata, evidence, and model calls. Malformed responses get bounded repairs; transient provider failures get bounded retries. Changed owner instructions, working scope, or Plan mode refresh the review within that same budget. Evidence remains available on refresh only while its scope and file metadata stay verified. Native Read permissions apply to evidence paths; file contents also pass through the actual Read tool and its classic hooks.
 
 A safety denial requests an explanation of the effect and the safer alternative or authorization needed. An unavailable review says that it could not complete and that the action was not run; it is a separate outcome from judging the action unsafe. The agent should report that action as blocked and continue independent work. Splitting or repeating equivalent commands does not resolve a review failure.
 
