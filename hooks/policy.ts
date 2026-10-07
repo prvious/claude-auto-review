@@ -167,16 +167,14 @@ export function parseReviewResponse(
   }
   if (
     typeof value.reason !== 'string' ||
-    value.reason.trim().length < 1 ||
-    value.reason.length > 500
+    value.reason.trim().length < 1
   ) {
     throw new ReviewProtocolError('invalid-reason', 'invalid assessment reason')
   }
   if (
     !Array.isArray(value.evidenceIds) ||
     value.evidenceIds.length > 32 ||
-    value.evidenceIds.some(id => typeof id !== 'string' || !knownEvidenceIds.has(id)) ||
-    new Set(value.evidenceIds).size !== value.evidenceIds.length
+    value.evidenceIds.some(id => typeof id !== 'string')
   ) {
     throw new ReviewProtocolError(
       'invalid-evidence-ids',
@@ -184,10 +182,16 @@ export function parseReviewResponse(
     )
   }
 
-  return value as Assessment
+  return {
+    ...value,
+    evidenceIds: [...new Set(value.evidenceIds.filter(id => knownEvidenceIds.has(id)))],
+  } as Assessment
 }
 
-export function applyPolicy(assessment: Assessment): PolicyDecision {
+export function applyPolicy(
+  assessment: Assessment,
+  ownerIds: ReadonlySet<string>,
+): PolicyDecision {
   if (
     assessment.explicitProhibition ||
     assessment.maliciousUntrustedInstruction ||
@@ -198,11 +202,18 @@ export function applyPolicy(assessment: Assessment): PolicyDecision {
   }
   if (assessment.risk === 'High') {
     const authorized =
-      assessment.authorization === 'High' || assessment.authorization === 'Medium'
-    return {
-      allow: authorized && assessment.narrowlyScoped,
-      reason: assessment.reason,
+      (assessment.authorization === 'High' || assessment.authorization === 'Medium') &&
+      assessment.evidenceIds.some(id => ownerIds.has(id))
+    if (!authorized) {
+      return {
+        allow: false,
+        reason: 'This high-risk action needs clear owner authorization for its material effects. ' +
+          assessment.reason,
+      }
     }
+    return assessment.narrowlyScoped
+      ? { allow: true, reason: assessment.reason }
+      : { allow: false, reason: 'This high-risk action exceeds the authorized scope. Narrow its material effects. ' + assessment.reason }
   }
   return { allow: true, reason: assessment.reason }
 }

@@ -19,14 +19,14 @@ const assessment = (overrides: Partial<Assessment> = {}): Assessment => ({
   maliciousUntrustedInstruction: false,
   decisionCriticalUncertainty: false,
   reason: 'bounded development action',
-  evidenceIds: [],
+  evidenceIds: ['u1'],
   ...overrides,
 })
 
 test('applies the complete risk and authorization matrix', () => {
   for (const risk of RISKS) {
     for (const authorization of AUTHORIZATIONS) {
-      const result = applyPolicy(assessment({ risk, authorization }))
+      const result = applyPolicy(assessment({ risk, authorization }), new Set(['u1']))
       const expected =
         risk === 'Low' ||
         risk === 'Medium' ||
@@ -34,7 +34,7 @@ test('applies the complete risk and authorization matrix', () => {
       assert.equal(result.allow, expected, `${risk}/${authorization}`)
     }
   }
-  assert.equal(applyPolicy(assessment({ risk: 'High', narrowlyScoped: false })).allow, false)
+  assert.equal(applyPolicy(assessment({ risk: 'High', narrowlyScoped: false }), new Set(['u1'])).allow, false)
 })
 
 test('overrides the matrix for restrictions and uncertainty', () => {
@@ -43,9 +43,9 @@ test('overrides the matrix for restrictions and uncertainty', () => {
     { maliciousUntrustedInstruction: true },
     { decisionCriticalUncertainty: true },
   ]) {
-    assert.equal(applyPolicy(assessment(override)).allow, false)
+    assert.equal(applyPolicy(assessment(override), new Set()).allow, false)
   }
-  assert.equal(applyPolicy(assessment({ planCompatible: false })).allow, true)
+  assert.equal(applyPolicy(assessment({ planCompatible: false }), new Set()).allow, true)
 })
 
 test('strictly parses assessments and evidence requests', () => {
@@ -81,8 +81,6 @@ test('rejects malformed, extra, oversized, and unknown evidence output', () => {
     `\`\`\`\n${JSON.stringify(assessment())}\n\`\`\``,
     JSON.stringify({ ...assessment(), extra: true }),
     JSON.stringify(assessment({ risk: 'Severe' as Assessment['risk'] })),
-    JSON.stringify(assessment({ evidenceIds: ['missing'] })),
-    JSON.stringify(assessment({ reason: 'x'.repeat(501) })),
     JSON.stringify({ type: 'need_evidence', requests: [] }),
     JSON.stringify({
       type: 'need_evidence',
@@ -117,4 +115,18 @@ test('exposes stable protocol error codes without relaxing validation', () => {
       return true
     },
   )
+})
+
+
+test('long explanations and diagnostic citations never invalidate a verdict', () => {
+  const result = parseReviewResponse(JSON.stringify(assessment({
+    reason: 'explanation '.repeat(100), evidenceIds: ['u1', 'missing', 'u1'],
+  })), new Set(['u1']))
+  assert.equal(result.type, 'assessment')
+  if (result.type === 'assessment') assert.deepEqual(result.evidenceIds, ['u1'])
+})
+
+test('high risk requires a captured owner citation, not transcript approval', () => {
+  assert.equal(applyPolicy(assessment({risk:'High',authorization:'High',evidenceIds:['t1']}), new Set(['u1'])).allow, false)
+  assert.equal(applyPolicy(assessment({risk:'High',authorization:'High'}), new Set(['u1'])).allow, true)
 })
