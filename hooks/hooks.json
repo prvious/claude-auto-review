@@ -1,4 +1,4 @@
 {
-  "description": "Fail-closed, action-scoped native-model review for pending tool permissions",
+  "description": "Native-model review for eligible pending permissions, with bounded recovery and independent diagnostics",
   "modules": ["./register.ts"]
 }

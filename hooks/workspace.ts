@@ -41,7 +41,7 @@ const inside = (root: string, path: string) =>
 
 const protectedPath = (root: string, path: string) =>
   inside(root, path) &&
-  path.split('/').some(part => part === '.git' || part === '.claude')
+  path.split('/').some(part => ['.git', '.claude'].includes(part.toLowerCase()))
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === 'object' && value !== null && !Array.isArray(value)

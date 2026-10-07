@@ -327,3 +327,18 @@ test('ignores unrelated tools and unsafe path spellings', async () => {
     undefined,
   )
 })
+
+test('case aliases of protected directories never receive workspace fast approval', async () => {
+  for (const segment of ['.Git', '.GIT', '.Claude', '.cLaUdE']) {
+    const path = `/work/app/${segment}/config`
+    const host = fakeHost({ files: [path], dirs: [`/work/app/${segment}`] })
+    assert.equal(await classifyWorkspaceMutation(host, mutation('Edit', { file_path: path })), undefined)
+    assert.equal(await classifyWorkspaceMutation(host, mutation('Write', { file_path: `/work/app/${segment}/new.json` })), undefined)
+  }
+})
+
+test('new protected files are reviewed under every case spelling', async () => {
+  for (const segment of ['.Git', '.GIT', '.Claude', '.cLaUdE']) {
+    assert.equal(await classifyWorkspaceMutation(fakeHost({}), mutation('Write', { file_path: `/work/app/${segment}` })), undefined)
+  }
+})
