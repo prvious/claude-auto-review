@@ -51,7 +51,10 @@ const nativeCases:any[]=[
   [{tool:'Bash',input:{},tool_use_id:'r1'},{decision:'deny',reason:'managed'},undefined],
   [{tool:'Bash',input:{},tool_use_id:'r1'},{decision:'ask',rule:'Bash(*)'},undefined],
   [{tool:'Edit',input:{file_path:'/work/a'},tool_use_id:'r1'},{decision:'ask',hook:'PreToolUse'},undefined],
+  [{tool:'Bash',input:{},tool_use_id:'r1'},{decision:'ask',setting:'permissions.blockReadsOutsideWorkingDirectories'},undefined],
+  [{tool:'Bash',input:{},tool_use_id:'r1'},{decision:'ask',plugin:'organization-policy'},undefined],
   [{tool:'Bash',input:{},tool_use_id:'r1',ceiling:'ask'},{decision:'ask',ceiling:'ask'},undefined],
+  [{tool:'Bash',input:{},tool_use_id:'r1',approver:'host'},{decision:'ask'},undefined],
   [{tool:'AskUserQuestion',input:{},tool_use_id:'r1'},{decision:'ask'},undefined],
   [{tool:'ExitPlanMode',input:{},tool_use_id:'r1'},{decision:'ask'},undefined],
   [{tool:'Bash',input:{}},{decision:'ask'},undefined],
@@ -60,6 +63,14 @@ const nativeCases:any[]=[
 
 test('native allows, denials, explicit asks, questions, plugin calls and queries are preserved',async()=>{
   for(const [input,down,origin] of nativeCases){const f=fixture();assert.deepEqual(await f.check(input,down,origin),down);assert.equal(f.modelCalls,0)}
+})
+
+test('approval history identifies an allow as the reviewer’s decision', async () => {
+  const f = fixture()
+  assert.equal((await f.check()).decision, 'allow')
+  const result = await f.invoke('command.run', { command: 'approval-history' }, undefined)
+  assert.match(result.text, /^Reviewer decisions\. Claude Code applies the final permission decision\./)
+  assert.match(result.text, /ALLOW Bash/)
 })
 
 test('metadata failure cannot block native allowed calls',async()=>{
@@ -317,12 +328,29 @@ test("a child's own mode attachment refreshes a review started under the parent'
 })
 
 test('native explicit asks survive downstream removal of their metadata',async()=>{
-  for(const metadata of [{rule:'Edit(*)'},{hook:'PreToolUse'},{ceiling:'ask'}]){
+  for(const metadata of [
+    {rule:'Edit(*)'},
+    {hook:'PreToolUse'},
+    {setting:'permissions.blockReadsOutsideWorkingDirectories'},
+    {plugin:'organization-policy'},
+    {ceiling:'ask'},
+  ]){
     const f=fixture();const next:any=async()=>({decision:'ask'})
     next.origin={plugin:'engine',tier:'core'};next.signal=f.controller.signal
     next.trace=[{plugin:'engine',tier:'core',event:'tool.check',outcome:'returned',returned:{decision:'ask',...metadata}}]
     assert.deepEqual(await f.invoke('tool.check',{tool:'Edit',tool_use_id:'explicit',input:{file_path:'/work/a.ts'}},next),{decision:'ask'})
     assert.equal(f.modelCalls,0)
+  }
+})
+
+test('a downstream confirmation requirement stays in force after an ordinary core ask', async () => {
+  for (const metadata of [{ setting: 'permissions.blockReadsOutsideWorkingDirectories' }, { plugin: 'organization-policy' }]) {
+    const f = fixture()
+    const result = { decision: 'ask', ...metadata }
+    const next = f.nextCheck(result)
+    next.trace = [{ plugin: 'engine', tier: 'core', event: 'tool.check', outcome: 'returned', returned: { decision: 'ask' } }]
+    assert.equal(await f.invoke('tool.check', { tool: 'Bash', tool_use_id: 'protected' }, next), result)
+    assert.equal(f.modelCalls, 0)
   }
 })
 
