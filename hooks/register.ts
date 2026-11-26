@@ -50,17 +50,20 @@ function hasCoreResult(
   })
 }
 
+function isOrdinaryAsk(result: Record<string, unknown> | undefined) {
+  return result?.decision === 'ask' && result.rule === undefined && result.hook === undefined &&
+    result.setting === undefined && result.plugin === undefined && result.ceiling !== 'ask'
+}
+
 function shouldReview(
-  e: { tool: string; tool_use_id?: string; ceiling?: unknown },
-  result: { decision: string; rule?: unknown; hook?: unknown; ceiling?: unknown },
+  e: { tool: string; tool_use_id?: string; ceiling?: unknown; approver?: unknown },
+  result: Record<string, unknown>,
   next: { origin: { plugin: string; tier: string }; trace: readonly unknown[] },
 ) {
-  return result.decision === 'ask' && result.rule === undefined && result.hook === undefined &&
-    result.ceiling !== 'ask' && e.ceiling !== 'ask' && !!e.tool_use_id &&
+  return isOrdinaryAsk(result) && e.ceiling !== 'ask' && e.approver !== 'host' && !!e.tool_use_id &&
     !['AskUserQuestion', 'ExitPlanMode'].includes(e.tool) &&
     next.origin.plugin === 'engine' && next.origin.tier === 'core' &&
-    hasCoreResult(next.trace, 'tool.check', result => result?.decision === 'ask' &&
-      result.rule === undefined && result.hook === undefined && result.ceiling !== 'ask')
+    hasCoreResult(next.trace, 'tool.check', isOrdinaryAsk)
 }
 
 export const register: Register = (on, options) => {
@@ -93,9 +96,13 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'approval-history' }, async $ => {
     const history = stateFor(await $.session.id()).history
-    return { text: history.length ? history.map(entry =>
+    if (!history.length) {
+      return { text: 'No approval-reviewer decisions in this session. History is kept until this session ends.' }
+    }
+    const entries = history.map(entry =>
       `${entry.verdict.toUpperCase()} ${sanitize(entry.tool, 64)} (${entry.kind}; attempts=${entry.attempts}) — ${entry.reason}`,
-    ).join('\n') : 'No approval-reviewer decisions in this session. History is kept until this session ends.' }
+    ).join('\n')
+    return { text: `Reviewer decisions. Claude Code applies the final permission decision.\n\n${entries}` }
   }).catch(() => ({ text: 'Approval history could not be displayed.' }))
 
   on('prompt.submit', async ($, e, next) => {
@@ -145,8 +152,8 @@ export const register: Register = (on, options) => {
 
   on('prompt.attachment', async ($, e, next) => {
     // ponytail: a failed lookup throws, so the host skips this hook, runs core and reports it.
-    // A missed entry leaves Plan unenforced until the next reminder; a missed exit keeps it
-    // enforced until Plan mode is entered and exited again. Track failures if this is observed.
+    // A missed attachment can leave the reviewer's Plan state stale until the next reminder
+    // or transition. Claude Code still applies its own Plan-mode restrictions.
     if (e.origin.kind === 'engine' && ['plan_mode', 'plan_mode_exit'].includes(e.type)) {
       const state = stateFor(await $.session.id())
       const loop = e.agentId ?? 'main'

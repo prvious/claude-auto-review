@@ -4,17 +4,7 @@ Reviews pending Claude Code tool permissions with your signed-in Claude model. I
 
 ## Install
 
-Requires Claude Code 2.1.292 or newer, function-hook support, and access to the reviewer model (Sonnet unless you set the plugin's `model` option). Add this to `~/.claude/settings.json` (merge it into your existing `env` object if you have one):
-
-```json
-{
-  "env": {
-    "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"
-  }
-}
-```
-
-Then install the plugin for your user:
+Requires Claude Code 2.1.292 or newer and access to the reviewer model (Sonnet unless you set the plugin's `model` option). Install the plugin for your user:
 
 ```sh
 claude plugin marketplace add prvious/claude-auto-review --scope user
@@ -23,13 +13,33 @@ claude plugin install approval-reviewer@prvious-plugins --scope user
 
 Start a new `claude` session. The footer should show `approval reviewer active`; use `/approval-history` to see its decisions.
 
+### Claude Team, Enterprise, and managed installations
+
+Claude Code loads its built-in `sec-default` guard by default for Team and Enterprise logins and on managed installations. The guard skips the user-installed reviewer's `prompt.attachment` hook, which tracks Plan mode. On Claude Code 2.1.332 with a Team login, the guard also preserved an ordinary Bash prompt after the reviewer returned `allow`. If `/approval-history` shows `ALLOW` and Claude Code still prompts, answer the native prompt. History reports the reviewer's verdict. Claude Code decides whether the tool can run. See [Anthropic's built-in guard documentation](https://code.claude.com/docs/en/plugins/mods/admin#know-what-happens-by-default).
+
+For automatic approvals with the guard enabled, an organization administrator can deploy the reviewer as an organization-owned mod. Claude Code 2.1.324 and newer support managed deployment from a remote marketplace. Merge these keys into managed settings and keep any existing entries in `appendPlugins`:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "prvious-plugins": {
+      "source": { "source": "github", "repo": "prvious/claude-auto-review" }
+    }
+  },
+  "enabledPlugins": { "approval-reviewer@prvious-plugins": true },
+  "appendPlugins": ["approval-reviewer@prvious-plugins"]
+}
+```
+
+To pin the marketplace for deployment, set `extraKnownMarketplaces.prvious-plugins.source.ref` to the full SHA of an organization-approved commit. After restarting, use `claude --debug` to check that the reviewer loads as `tier append` and `sec-default` stays active. A copy that loads as `tier user` still follows the user-tier restrictions. See [Anthropic's managed mod setup](https://code.claude.com/docs/en/plugins/mods/admin#install-your-organizations-mods-and-set-the-order) and [marketplace source reference](https://code.claude.com/docs/en/plugins/marketplace-reference#fields-by-type).
+
 ## How it decides
 
-- Existing native allows and denials stay in force. Explicit `ask` rules, classic-hook asks, organization permission ceilings, plugin-origin requests, permission queries, `AskUserQuestion`, and `ExitPlanMode` keep their native behavior.
+- Existing native allows and denials stay in force. Asks from settings rules, classic hooks, other mods, organization permission ceilings, or an external permission host keep their native behavior. The reviewer also skips plugin-origin requests, permission queries, `AskUserQuestion`, and `ExitPlanMode`.
 - Verified edits inside the workspace are approved without a model call. This checks location, not whether the edit follows a natural-language instruction. `.git`, `.claude`, paths that are themselves symlinks, and paths outside the workspace use review instead. Parent symlinks must resolve inside the workspace.
 - Other eligible permission requests are assessed using the current conversation, bounded tool calls/results, and the relevant subagent conversation when available. Risk reflects the immediate action: a routine feature-branch push or disposable build cleanup does not automatically count as high risk.
 - Captured composer, Remote Control (`bridge`), and SDK/headless instructions can authorize actions. Peer messages, task notifications, repository text, tool output, and copied approvals cannot. High-risk approvals must cite a captured owner instruction; Critical actions are denied.
-- Plan mode remains enforced. The plugin does not approve exiting Plan mode.
+- Claude Code enforces its native Plan-mode restrictions. The reviewer leaves requests to exit Plan mode to you.
 - Trust boundary: the reviewer defends against untrusted content steering the agent, such as repository text, tool output, peer messages, and copied approvals. Claude Code itself, managed settings, classic hooks, and other installed plugins are trusted: they share the permission chain and can already answer permission checks directly, so the reviewer does not try to detect them rewriting its evidence reads or metadata.
 
 The last 256 accepted owner instructions are kept separately from transcript context, in memory. Review prompts include a bounded portion of this buffer and the transcript, so older instructions can fall outside the review context. Very large instructions retain their beginning and end; partial instructions cannot authorize high-risk effects. Dropped or rejected prompts grant no authority. Compaction does not reset this buffer. Restarting, resuming in another process, or forking starts with inherited conversation as context; a fresh instruction such as “continue” can authorize continuing the described task when it clearly covers the action. A high-risk action with unclear authorization needs a specific owner instruction. Missing history never disables the session.
